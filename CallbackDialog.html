@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <meta charset="utf-8" />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 12px;
+      }
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+      input[type='datetime-local'] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        margin-bottom: 10px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      button {
+        padding: 8px 12px;
+      }
+      #msg {
+        color: #b71c1c;
+        min-height: 16px;
+        margin-bottom: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <label for="callbackDt">Callback Date/Time</label>
+    <input id="callbackDt" type="datetime-local" required />
+    <div id="msg"></div>
+    <div class="actions">
+      <button onclick="onCancel()" type="button">Cancel</button>
+      <button onclick="onSave()" type="button">Save</button>
+    </div>
+
+    <script>
+      function setMessage(text) {
+        document.getElementById('msg').textContent = text || '';
+      }
+
+      function onSave() {
+        var value = document.getElementById('callbackDt').value;
+        if (!value) {
+          setMessage('Please choose a callback date/time.');
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(function() {
+            google.script.host.close();
+          })
+          .withFailureHandler(function(err) {
+            setMessage(err && err.message ? err.message : 'Failed to save callback date/time.');
+          })
+          .submitCallbackDateTime(value);
+      }
+
+      function onCancel() {
+        google.script.run
+          .withSuccessHandler(function() {
+            google.script.host.close();
+          })
+          .cancelCallbackDateTime();
+      }
+    </script>
+  </body>
+</html>
