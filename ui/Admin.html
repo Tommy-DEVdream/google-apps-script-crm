@@ -1,0 +1,358 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <?!= include('ui/styles.css'); ?>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <h1>CRM Admin Portal</h1>
+          <div class="row">
+            <button class="secondary" onclick="go('agent')">Open Agent View</button>
+            <button class="danger" onclick="logout()">Logout</button>
+          </div>
+        </div>
+        <div id="error" class="msg error"></div>
+        <div id="success" class="msg success"></div>
+      </div>
+
+      <div id="loading" class="card loading">Loading admin state...</div>
+      <div id="app" style="display:none;">
+        <div class="card">
+          <h2>User management</h2>
+          <div class="row">
+            <div class="col"><label>Username</label><input id="newUsername"></div>
+            <div class="col"><label>Password</label><input id="newPassword" type="text"></div>
+            <div class="col"><label>Role</label><select id="newRole"><option>ADMIN</option><option selected>AGENT</option></select></div>
+            <div class="col" style="align-self:flex-end;"><button onclick="createUser()">Create user</button></div>
+          </div>
+          <table id="usersTable"></table>
+        </div>
+
+        <div class="card">
+          <h2>Customer lists</h2>
+          <div class="row">
+            <div class="col"><label>New list name</label><input id="newListName"></div>
+            <div class="col" style="align-self:flex-end;"><button onclick="createList()">Create list</button></div>
+            <div class="col"><label>Selected list</label><select id="listSelect" onchange="onListChange()"></select></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Bulk import customers</h2>
+          <p class="muted">One line per customer: <code>customerName,phone,notes</code>. Supports literal \n too.</p>
+          <textarea id="csvInput" placeholder="Maria,555123,VIP\nJohn, ,"></textarea>
+          <div style="margin-top:10px;"><button id="importBtn" onclick="importCustomers()">Import to selected list</button></div>
+        </div>
+
+        <div class="card">
+          <h2>Assign lists to agents</h2>
+          <div id="assignPlaceholder" class="muted"></div>
+          <div id="assignUI" style="display:none;">
+            <div class="row">
+              <div class="col"><label>Agent</label><select id="agentSelect" onchange="renderAssignmentChecklist()"></select></div>
+            </div>
+            <div id="listChecklist" class="checklist" style="margin-top:8px;"></div>
+            <div style="margin-top:10px;"><button onclick="saveAssignments()">Save assignments</button></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Reports</h2>
+          <div class="row">
+            <div class="col"><label>Date from</label><input id="reportFrom" type="date"></div>
+            <div class="col"><label>Date to</label><input id="reportTo" type="date"></div>
+            <div class="col" style="align-self:flex-end;"><button onclick="loadReport()">Run report</button></div>
+          </div>
+          <div id="reportOut" class="muted" style="margin-top:10px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const SESSION_KEY = 'crm_session';
+      let state = null;
+
+      function rpc(fnName, args) {
+        return new Promise((resolve, reject) => {
+          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fnName].apply(null, args || []);
+        });
+      }
+
+      function resolveToken() {
+        const params = new URLSearchParams(window.location.search);
+        const t = params.get('t');
+        if (t) {
+          localStorage.setItem(SESSION_KEY, t);
+          return t;
+        }
+        return localStorage.getItem(SESSION_KEY);
+      }
+
+      function go(page) {
+        const token = localStorage.getItem(SESSION_KEY) || '';
+        const base = window.location.origin + window.location.pathname;
+        window.location.href = `${base}?page=${encodeURIComponent(page)}${token ? `&t=${encodeURIComponent(token)}` : ''}`;
+      }
+
+      function showError(msg) {
+        const el = document.getElementById('error');
+        el.style.display = 'block'; el.textContent = msg;
+      }
+      function showSuccess(msg) {
+        const el = document.getElementById('success');
+        el.style.display = 'block'; el.textContent = msg;
+      }
+      function clearMessages() {
+        document.getElementById('error').style.display = 'none';
+        document.getElementById('success').style.display = 'none';
+      }
+
+      async function loadState() {
+        const token = resolveToken();
+        if (!token) {
+          localStorage.removeItem(SESSION_KEY);
+          go('login');
+          return;
+        }
+        const resp = await rpc('apiAdminGetState', [token]);
+        if (!resp.ok) {
+          localStorage.removeItem(SESSION_KEY);
+          showError(resp.error || 'Session invalid.');
+          setTimeout(() => go('login'), 500);
+          return;
+        }
+        state = resp.data;
+        render(state);
+      }
+
+      function render(s) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+
+        renderUsers(s);
+        renderLists(s);
+        renderAssignments(s);
+      }
+
+      function renderUsers(s) {
+        const table = document.getElementById('usersTable');
+        let html = '<tr><th>Username</th><th>Role</th><th>Status</th><th>Actions</th></tr>';
+        s.users.forEach(u => {
+          html += `<tr>
+            <td>${escapeHtml(u.username)}</td>
+            <td>${u.role}</td>
+            <td><span class="pill ${u.isActive ? 'active':'inactive'}">${u.isActive ? 'Active' : 'Inactive'}</span></td>
+            <td>
+              <button onclick="resetPassword('${u.userId}')">Reset password</button>
+              <button class="secondary" onclick="setUserActive('${u.userId}', ${u.isActive ? 'false':'true'})">${u.isActive ? 'Deactivate':'Activate'}</button>
+            </td>
+          </tr>`;
+        });
+        table.innerHTML = html;
+      }
+
+      function renderLists(s) {
+        const sel = document.getElementById('listSelect');
+        sel.innerHTML = '';
+        s.lists.forEach(l => {
+          const opt = document.createElement('option');
+          opt.value = l.listId;
+          opt.textContent = l.listName;
+          sel.appendChild(opt);
+        });
+        if (s.selectedListId) {
+          sel.value = s.selectedListId;
+        }
+        if (!s.lists.length) {
+          const opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = 'No lists yet';
+          sel.appendChild(opt);
+        }
+      }
+
+      function renderAssignments(s) {
+        const placeholder = document.getElementById('assignPlaceholder');
+        const assignUI = document.getElementById('assignUI');
+
+        const activeAgents = s.agents.filter(a => a.isActive);
+        if (!activeAgents.length) {
+          placeholder.textContent = 'Create an AGENT first.';
+          assignUI.style.display = 'none';
+          return;
+        }
+        if (!s.lists.length) {
+          placeholder.textContent = 'Create a customer list first.';
+          assignUI.style.display = 'none';
+          return;
+        }
+        placeholder.textContent = '';
+        assignUI.style.display = 'block';
+
+        const agentSel = document.getElementById('agentSelect');
+        const previous = agentSel.value;
+        agentSel.innerHTML = '';
+        activeAgents.forEach(a => {
+          const opt = document.createElement('option');
+          opt.value = a.userId;
+          opt.textContent = a.username;
+          agentSel.appendChild(opt);
+        });
+        if (previous && activeAgents.some(a => a.userId === previous)) {
+          agentSel.value = previous;
+        }
+
+        renderAssignmentChecklist();
+      }
+
+      function renderAssignmentChecklist() {
+        if (!state) return;
+        const agentId = document.getElementById('agentSelect').value;
+        const assigned = state.assignmentsByUserId[agentId] || [];
+        const box = document.getElementById('listChecklist');
+        box.innerHTML = '';
+        state.lists.forEach(l => {
+          const label = document.createElement('label');
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = l.listId;
+          cb.checked = assigned.indexOf(l.listId) !== -1;
+          label.appendChild(cb);
+          label.appendChild(document.createTextNode(l.listName));
+          box.appendChild(label);
+        });
+      }
+
+      function onListChange() {
+        const listId = document.getElementById('listSelect').value;
+        state.selectedListId = listId || null;
+      }
+
+      async function mutateAndRefresh(fnName, args, successMessage) {
+        clearMessages();
+        const resp = await rpc(fnName, args || []);
+        if (!resp.ok) {
+          showError(resp.error || 'Operation failed.');
+          return null;
+        }
+        if (successMessage) showSuccess(successMessage);
+        await loadState();
+        return resp.data;
+      }
+
+      async function createUser() {
+        const token = resolveToken();
+        const username = document.getElementById('newUsername').value.trim();
+        const password = document.getElementById('newPassword').value;
+        const role = document.getElementById('newRole').value;
+        await mutateAndRefresh('apiAdminCreateUser', [token, username, password, role], 'User created.');
+      }
+
+      async function resetPassword(userId) {
+        const token = resolveToken();
+        const data = await mutateAndRefresh('apiAdminResetPassword', [token, userId], 'Password reset.');
+        if (data && data.tempPassword) {
+          showSuccess('Temporary password (show once): ' + data.tempPassword);
+        }
+      }
+
+      async function setUserActive(userId, active) {
+        const token = resolveToken();
+        await mutateAndRefresh('apiAdminSetUserActive', [token, userId, active], 'User status updated.');
+      }
+
+      async function createList() {
+        const token = resolveToken();
+        const listName = document.getElementById('newListName').value.trim();
+        const resp = await rpc('apiAdminCreateList', [token, listName]);
+        if (!resp.ok) {
+          showError(resp.error || 'Create list failed.');
+          return;
+        }
+        state.selectedListId = resp.data.listId;
+        showSuccess('List created.');
+        await loadState();
+      }
+
+      function resolveImportListId() {
+        const selected = state.selectedListId;
+        if (selected && state.lists.some(l => l.listId === selected)) return selected;
+        if (state.lists.length) return state.lists[0].listId;
+        return null;
+      }
+
+      async function importCustomers() {
+        clearMessages();
+        const token = resolveToken();
+        const listId = resolveImportListId();
+        if (!listId) {
+          showError('Create a customer list first.');
+          return;
+        }
+        const text = document.getElementById('csvInput').value;
+        const resp = await rpc('apiAdminImportCustomers', [token, listId, text]);
+        if (!resp.ok) {
+          showError(resp.error || 'Import failed.');
+          return;
+        }
+        showSuccess(`Import done. Inserted ${resp.data.inserted}, skipped ${resp.data.skipped}, errors ${resp.data.errors}.`);
+        await loadState();
+      }
+
+      async function saveAssignments() {
+        const token = resolveToken();
+        const agentId = document.getElementById('agentSelect').value;
+        const listIds = Array.from(document.querySelectorAll('#listChecklist input[type="checkbox"]:checked')).map(cb => cb.value);
+        await mutateAndRefresh('apiAdminSetAssignments', [token, agentId, listIds], 'Assignments saved.');
+      }
+
+      async function loadReport() {
+        clearMessages();
+        const token = resolveToken();
+        const from = document.getElementById('reportFrom').value;
+        const to = document.getElementById('reportTo').value;
+        const resp = await rpc('apiAdminReport', [token, from, to]);
+        if (!resp.ok) {
+          showError(resp.error || 'Report failed.');
+          return;
+        }
+        const d = resp.data;
+        const lines = [];
+        lines.push('Calls / Orders by agent:');
+        if (!d.byAgent.length) lines.push('- No calls in date range.');
+        d.byAgent.forEach(a => lines.push(`- ${a.username}: calls=${a.calls}, orders=${a.orders}`));
+        lines.push('Callbacks: due today=' + d.callbacks.dueToday + ', upcoming next 7 days=' + d.callbacks.upcoming7Days);
+        document.getElementById('reportOut').textContent = lines.join('\n');
+      }
+
+      async function logout() {
+        const token = resolveToken();
+        await rpc('apiLogout', [token]);
+        localStorage.removeItem(SESSION_KEY);
+        go('login');
+      }
+
+      function escapeHtml(v) {
+        return String(v == null ? '' : v)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      (async function init() {
+        try { await loadState(); }
+        catch (err) {
+          showError('Failed to load state.');
+          localStorage.removeItem(SESSION_KEY);
+          setTimeout(() => go('login'), 600);
+        }
+      })();
+    </script>
+  </body>
+</html>
