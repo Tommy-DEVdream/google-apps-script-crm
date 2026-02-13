@@ -1,0 +1,71 @@
+<style>
+  :root {
+    --bg: #f6f8fc;
+    --card: #ffffff;
+    --line: #d9e0ef;
+    --text: #1f2a44;
+    --primary: #2c5be7;
+    --danger: #c73737;
+    --success: #1f7a3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .container {
+    max-width: 1200px;
+    margin: 24px auto;
+    padding: 0 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .col { flex: 1 1 220px; }
+  h1, h2, h3 { margin: 0 0 12px; }
+  label { display:block; margin-bottom: 6px; font-size: 13px; font-weight: bold; }
+  input, select, textarea, button {
+    width: 100%;
+    border: 1px solid #bdc7de;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+  textarea { min-height: 120px; }
+  button {
+    width: auto;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+  }
+  button.secondary { background: #6c7a97; }
+  button.danger { background: var(--danger); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    padding: 8px 6px;
+    vertical-align: top;
+    font-size: 13px;
+  }
+  .msg { padding: 8px 10px; border-radius: 6px; margin-bottom: 10px; display:none; }
+  .msg.error { background: #fdeaea; color: #8f1e1e; border: 1px solid #f2b8b8; }
+  .msg.success { background: #eaf8ef; color: #1f6c37; border: 1px solid #bfe4c8; }
+  .muted { color: #60708f; font-size: 13px; }
+  .loading { padding: 18px; text-align: center; }
+  .pill { display: inline-block; padding: 3px 7px; border-radius: 999px; font-size: 12px; }
+  .pill.active { background: #e8f5ec; color: #1f7a3d; }
+  .pill.inactive { background: #ffecec; color: #b03232; }
+  .checklist { border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 220px; overflow:auto; }
+  .checklist label { display: flex; align-items: center; gap: 8px; font-weight: normal; margin-bottom: 8px; }
+  .checklist input { width: auto; }
+</style>

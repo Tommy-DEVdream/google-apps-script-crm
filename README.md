@@ -1,120 +1,156 @@
-# Google Sheets CRM (Apps Script)
+# Google Apps Script CRM Web App
 
-This repository contains a complete CRM implementation for Google Sheets using only Google Apps Script.
+This project is a production-oriented CRM web app built with Google Apps Script + Google Sheets as database only. End users do not use spreadsheet tabs directly.
 
-## What this CRM provides
+## Routing strategy
 
-- **CALL_SCREEN** dashboard
-  - Customer picker at `C3`
-  - Pending callbacks (today)
-  - Upcoming callbacks (future)
-  - Quick links to open customer sheets
-- **All_Customers** overview
-  - One row per customer
-  - Last contact/result, next callback
-  - Call history columns (`CALL1..CALL20`, where `CALL1` = most recent)
-- **TEMPLATE_CALLLOG**
-  - Used to create new customer sheets
-  - Row 3 exact headers:
-    - A3 = `Date/Time Opened`
-    - B3 = `Result`
-    - C3 = `Comment`
-    - D3 = `Callback Date/Time`
-- **One sheet per customer**
-  - Call log starts at row 4
-  - Result dropdown options:
-    - `No answer`, `Cant talk`, `Order`, `Call back`
-  - Callback UX via modal datetime dialog when Result = `Call back`
+This implementation uses `e.parameter.page` consistently:
+- Login: `.../exec?page=login`
+- Admin: `.../exec?page=admin`
+- Agent: `.../exec?page=agent`
 
----
+Token is passed as `?t=TOKEN` and persisted to `localStorage.crm_session`.
 
-## Files
+## Required project files
 
-- `Code.gs` – all logic (setup, triggers, menus, dashboards, customer operations, utilities)
-- `CallbackDialog.html` – modal dialog for callback datetime input
+- `Code.gs`
+- `server/DbService.gs`
+- `server/AuthService.gs`
+- `server/AdminService.gs`
+- `server/AgentService.gs`
+- `ui/Login.html`
+- `ui/Admin.html`
+- `ui/Agent.html`
+- `ui/styles.css.html`
+- `README.md`
 
----
+## Setup (from scratch)
 
-## Setup (fresh spreadsheet)
+1. Create/open a Google Spreadsheet (DB only).
+2. Open **Extensions > Apps Script**.
+3. Paste each file exactly with the same names and folders.
+4. Save project.
+5. Run `setupDatabase()` **once** from Apps Script editor and authorize.
+6. Deploy web app:
+   - **Execute as:** Me
+   - **Who has access:** Anyone
+7. Open deployed URL (`?page=login` is optional; login is default route).
 
-1. Create/open your Google Sheet.
-2. Open **Extensions → Apps Script**.
-3. Paste contents of:
-   - `Code.gs`
-   - `CallbackDialog.html`
-4. Save the project.
-5. Run function **`setupCRM`** once from Apps Script editor.
-6. Authorize permissions when prompted.
 
-Done. The script will:
-- create/fix required sheets,
-- format layout,
-- install installable triggers (`onOpen`, `onEdit`),
-- build dropdowns,
-- refresh dashboards.
+## If you cannot paste a full `Code.gs` file
 
----
+Some users do not get a reliable “paste full file” experience in the Apps Script browser editor.
+Use this safer method:
 
-## Daily usage
+1. In Apps Script, click **+** and create files one by one (same names/folders as this repo).
+2. Paste **small blocks** (for example 80–150 lines each), save, then continue.
+3. Start with `server/*.gs` and `ui/*.html` files first.
+4. Paste `Code.gs` last (it is only the entrypoint/router + API wrappers).
+5. Run `setupDatabase()` once after all files are saved.
 
-1. Go to `CALL_SCREEN`.
-2. In `C3`, type or select a customer name.
-3. Use menu: **CRM → Open Customer (from CALL_SCREEN)**.
-   - Creates customer sheet from `TEMPLATE_CALLLOG` if missing.
-   - Appends a new call row with current datetime in column A.
-4. Fill call result/comment in the customer sheet.
-5. If Result = `Call back`, a modal prompts for callback date/time.
-   - **Save** writes datetime to column D.
-   - **Cancel** clears Result (B) and Callback (D) on that row.
-6. Use menu: **CRM → Refresh Dashboards** any time.
+This avoids editor timeouts/clipboard truncation and produces the same final project.
 
----
+## Default admin account
 
-## Menu functions (exact names)
+Automatically created by `setupDatabase()` if missing:
+- Username: `Thomaz Muller`
+- Password: `Rodmor2011@`
+- Role: `ADMIN`
 
-- `setupCRM`
-- `installTriggers`
-- `menuOpenCustomerFromCallScreen`
-- `refreshDashboards`
-- `goToCallScreen`
+## Data model tabs and headers
 
-Installable trigger entry points:
-- `onOpen`
-- `onEdit`
+`setupDatabase()` ensures exact sheets/headers exist:
+1. CONFIG: `key, value`
+2. USERS: `userId, username, passwordHash, passwordSalt, role, isActive, createdAt, lastLoginAt`
+3. CUSTOMER_LISTS: `listId, listName, createdAt`
+4. CUSTOMERS: `customerId, listId, customerName, phone, notes, isActive`
+5. ASSIGNMENTS: `assignmentId, userId, listId, createdAt`
+6. CALL_LOGS: `logId, customerId, userId, callAt, result, comment, callbackAt, createdAt`
+7. SESSIONS: `sessionId, userId, expiresAt, createdAt`
 
----
+## Reliability architecture implemented
 
-## Configuration constants
+- Single initial state call per page:
+  - Admin: `apiAdminGetState(token)`
+  - Agent: `apiAgentGetState(token)`
+- UI waits for GetState before rendering interactive controls.
+- DOM is never source of truth; page-level `state` object is source of truth.
+- After every mutation: await mutation -> re-fetch GetState -> render.
+- Dropdown/list import resolution is deterministic.
+- Assignment UI renders deterministic placeholders when no agents/lists.
+- Assignments replace atomically server-side under script lock.
+- Session stability:
+  - token resolved from `?t=` then localStorage fallback
+  - internal navigation always preserves token via helper `go(page)`
+  - invalid/expired session clears token and redirects to login
 
-Defined in `Code.gs`:
+## Troubleshooting
 
-- `SYSTEM_SHEETS = ["CALL_SCREEN","All_Customers","TEMPLATE_CALLLOG"]`
-- `RESULT_OPTIONS = ["No answer","Cant talk","Order","Call back"]`
-- `DATA_START_ROW = 4`
-- `HEADER_ROW = 3`
-- `MAX_CALL_HISTORY = 20`
+### 1) Dropdown not selected after creating list
+- Behavior is deterministic:
+  - server returns created `listId`
+  - client sets `state.selectedListId` immediately
+  - then refreshes `apiAdminGetState`
+- Verify you are using the provided `createList()` flow and not manual DOM state.
 
-Additional config:
-- `THROTTLE_SECONDS` (default `8`) to limit expensive dashboard refresh frequency.
+### 2) Import says `listId required`
+- Import resolves listId in strict order:
+  1. `state.selectedListId` if valid
+  2. first list in `state.lists`
+  3. else action disabled/error: "Create a customer list first."
+- Ensure at least one list exists.
 
----
+### 3) Assignment panel empty or broken
+- UI intentionally shows placeholders:
+  - "Create an AGENT first" if no active AGENT users
+  - "Create a customer list first" if no lists
+- Once both exist, it shows agent selector and plain checkbox checklist.
 
-## Edge cases handled
+### 4) Random logout / bounce to login
+- Token lifecycle:
+  - URL `?t=TOKEN` persists into localStorage
+  - localStorage reused on refresh
+  - `go(page)` preserves token on all internal navigation
+- If you still redirect, session likely expired or user deactivated.
 
-- Missing required sheets (recreated by setup/refresh helpers)
-- Missing `TEMPLATE_CALLLOG` (auto recreated)
-- Illegal sheet characters removed from customer names: `[]:*?/\`
-- Name length limit to 100 chars
-- Duplicate customer sheet names auto-suffixed (`Name (2)`, `Name (3)`, ...)
-- Blank edits ignored where appropriate
-- Non-customer sheets excluded from `onEdit` logic
-- Concurrent refresh/open operations protected with `LockService`
 
----
+### 5) Default admin login fails right after setup
+- Run `setupDatabase()` again.
+- The setup now guarantees the default admin account is present, active, role `ADMIN`, and password reset to `Rodmor2011@` if needed.
+- Then login with:
+  - Username: `Thomaz Muller`
+  - Password: `Rodmor2011@`
 
-## Performance notes
+## Acceptance test checklist
 
-- Uses batched reads (`getValues`) and batched writes (`setValues`) where practical.
-- Dashboard refresh is throttled through `PropertiesService` to avoid excessive updates.
-- Customer list derives from customer sheet names (non-system sheets).
+A) Setup and login
+- Run `setupDatabase()`.
+- Expected: all 7 tabs exist with exact headers.
+- Expected: default admin can login (`Thomaz Muller` / `Rodmor2011@`).
+
+B) List + import
+- Create list `Test A`.
+- Expected: list dropdown auto-selects `Test A`.
+- Import 5 lines like:
+  - `Name 1,,`
+  - `Name 2,,`
+  - ...
+- Expected: inserted=5, each customer linked to `Test A` listId.
+
+C) Assignments persist
+- Create AGENT user.
+- Assign list `Test A` to that agent.
+- Refresh/re-login.
+- Expected: assignment remains persisted.
+
+D) Stable sessions
+- Navigate login/admin/agent using in-app buttons and refresh pages.
+- Expected: no random logout while session valid.
+- Click logout.
+- Expected: token removed and returns to login.
+
+E) Agent data isolation
+- Login as agent.
+- Expected: sees only customers from assigned lists.
+- Expected: cannot open unassigned customer details via API.
 
