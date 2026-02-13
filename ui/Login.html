@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <?!= include('ui/styles.css'); ?>
+  </head>
+  <body>
+    <div class="container" style="max-width:520px;">
+      <div class="card">
+        <h1>CRM Login</h1>
+        <div id="error" class="msg error"></div>
+        <div id="success" class="msg success"></div>
+        <div class="col">
+          <label>Username</label>
+          <input id="username" type="text" autocomplete="username"/>
+        </div>
+        <div class="col" style="margin-top:8px;">
+          <label>Password</label>
+          <input id="password" type="password" autocomplete="current-password"/>
+        </div>
+        <div style="margin-top:12px;">
+          <button id="loginBtn" onclick="onLogin()">Login</button>
+        </div>
+      </div>
+    </div>
+    <script>
+      const SESSION_KEY = 'crm_session';
+
+      function rpc(fnName, args) {
+        return new Promise((resolve, reject) => {
+          google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)[fnName].apply(null, args || []);
+        });
+      }
+
+      function resolveToken() {
+        const params = new URLSearchParams(window.location.search);
+        const t = params.get('t');
+        if (t) {
+          localStorage.setItem(SESSION_KEY, t);
+          return t;
+        }
+        return localStorage.getItem(SESSION_KEY);
+      }
+
+      function go(page) {
+        const token = localStorage.getItem(SESSION_KEY) || '';
+        const base = window.location.origin + window.location.pathname;
+        window.location.href = `${base}?page=${encodeURIComponent(page)}${token ? `&t=${encodeURIComponent(token)}` : ''}`;
+      }
+
+      function showError(message) {
+        const el = document.getElementById('error');
+        el.style.display = 'block';
+        el.textContent = message;
+      }
+
+      function showSuccess(message) {
+        const el = document.getElementById('success');
+        el.style.display = 'block';
+        el.textContent = message;
+      }
+
+      function clearMessages() {
+        document.getElementById('error').style.display = 'none';
+        document.getElementById('success').style.display = 'none';
+      }
+
+      async function onLogin() {
+        clearMessages();
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        if (!username || !password) {
+          showError('Username and password are required.');
+          return;
+        }
+
+        const btn = document.getElementById('loginBtn');
+        btn.disabled = true;
+        try {
+          const resp = await rpc('apiLogin', [username, password]);
+          if (!resp.ok) {
+            showError(resp.error || 'Login failed.');
+            return;
+          }
+          const token = resp.data.token;
+          localStorage.setItem(SESSION_KEY, token);
+          showSuccess('Login successful. Redirecting...');
+          if (resp.data.user.role === 'ADMIN') {
+            go('admin');
+          } else {
+            go('agent');
+          }
+        } catch (err) {
+          showError('Network/server error.');
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      (function init() {
+        const token = resolveToken();
+        if (token) {
+          showSuccess('Existing session token detected. Login or continue via menu path.');
+        }
+      })();
+    </script>
+  </body>
+</html>

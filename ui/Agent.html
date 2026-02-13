@@ -1,0 +1,234 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <?!= include('ui/styles.css'); ?>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <h1>CRM Agent Portal</h1>
+          <div class="row">
+            <button class="secondary" onclick="go('admin')">Admin</button>
+            <button class="danger" onclick="logout()">Logout</button>
+          </div>
+        </div>
+        <div id="error" class="msg error"></div>
+        <div id="success" class="msg success"></div>
+      </div>
+
+      <div id="loading" class="card loading">Loading agent state...</div>
+      <div id="app" style="display:none;">
+        <div class="card">
+          <h2>Today callbacks</h2>
+          <div id="todayCallbacks" class="muted"></div>
+        </div>
+
+        <div class="card">
+          <h2>Upcoming callbacks (next 7 days)</h2>
+          <div id="upcomingCallbacks" class="muted"></div>
+        </div>
+
+        <div class="card">
+          <h2>Search customers</h2>
+          <div class="row">
+            <div class="col"><input id="searchQuery" placeholder="Type name contains..."></div>
+            <div class="col" style="align-self:flex-end;"><button onclick="searchCustomers()">Search</button></div>
+          </div>
+          <table id="searchResults"></table>
+        </div>
+
+        <div class="card">
+          <h2>Customer detail</h2>
+          <div id="customerDetail" class="muted">Select a customer to view details.</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const SESSION_KEY = 'crm_session';
+      let state = null;
+      let selectedCustomerId = null;
+
+      function rpc(fnName, args) {
+        return new Promise((resolve, reject) => {
+          google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fnName].apply(null, args || []);
+        });
+      }
+
+      function resolveToken() {
+        const params = new URLSearchParams(window.location.search);
+        const t = params.get('t');
+        if (t) {
+          localStorage.setItem(SESSION_KEY, t);
+          return t;
+        }
+        return localStorage.getItem(SESSION_KEY);
+      }
+
+      function go(page) {
+        const token = localStorage.getItem(SESSION_KEY) || '';
+        const base = window.location.origin + window.location.pathname;
+        window.location.href = `${base}?page=${encodeURIComponent(page)}${token ? `&t=${encodeURIComponent(token)}` : ''}`;
+      }
+
+      function showError(msg) { const el = document.getElementById('error'); el.style.display='block'; el.textContent = msg; }
+      function showSuccess(msg) { const el = document.getElementById('success'); el.style.display='block'; el.textContent = msg; }
+      function clearMessages() {
+        document.getElementById('error').style.display='none';
+        document.getElementById('success').style.display='none';
+      }
+
+      async function loadState() {
+        const token = resolveToken();
+        if (!token) {
+          localStorage.removeItem(SESSION_KEY);
+          go('login');
+          return;
+        }
+        const resp = await rpc('apiAgentGetState', [token]);
+        if (!resp.ok) {
+          localStorage.removeItem(SESSION_KEY);
+          showError(resp.error || 'Session invalid.');
+          setTimeout(() => go('login'), 500);
+          return;
+        }
+        state = resp.data;
+        render(state);
+      }
+
+      function render(s) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+
+        renderCallbacks('todayCallbacks', s.todayCallbacks);
+        renderCallbacks('upcomingCallbacks', s.upcomingCallbacks);
+        renderInitialResults(s.customerIndex);
+      }
+
+      function renderCallbacks(elId, arr) {
+        const el = document.getElementById(elId);
+        if (!arr.length) {
+          el.textContent = 'No callbacks.';
+          return;
+        }
+        el.innerHTML = arr.map(item =>
+          `<div>${escapeHtml(item.customerName)} (${escapeHtml(item.phone || '-')}) - ${new Date(item.callbackAt).toLocaleString()}</div>`
+        ).join('');
+      }
+
+      function renderInitialResults(customers) {
+        const table = document.getElementById('searchResults');
+        let html = '<tr><th>Name</th><th>Phone</th><th>Action</th></tr>';
+        customers.slice(0, 100).forEach(c => {
+          html += `<tr><td>${escapeHtml(c.customerName)}</td><td>${escapeHtml(c.phone || '-')}</td><td><button onclick="openCustomer('${c.customerId}')">Open</button></td></tr>`;
+        });
+        table.innerHTML = html;
+      }
+
+      async function searchCustomers() {
+        clearMessages();
+        const token = resolveToken();
+        const query = document.getElementById('searchQuery').value;
+        const resp = await rpc('apiAgentSearch', [token, query]);
+        if (!resp.ok) {
+          showError(resp.error || 'Search failed.');
+          return;
+        }
+        renderInitialResults(resp.data.results || []);
+      }
+
+      async function openCustomer(customerId) {
+        clearMessages();
+        const token = resolveToken();
+        const resp = await rpc('apiAgentGetCustomer', [token, customerId]);
+        if (!resp.ok) {
+          showError(resp.error || 'Unable to load customer detail.');
+          return;
+        }
+        selectedCustomerId = customerId;
+        const c = resp.data.customer;
+        const history = resp.data.history || [];
+        const historyHtml = history.length ? history.map(h => `<li>${new Date(h.callAt).toLocaleString()} — ${escapeHtml(h.result)} — ${escapeHtml(h.comment || '')}${h.callbackAt ? ` (Callback: ${new Date(h.callbackAt).toLocaleString()})` : ''}</li>`).join('') : '<li>No call history yet.</li>';
+
+        document.getElementById('customerDetail').innerHTML = `
+          <div><b>Name:</b> ${escapeHtml(c.customerName)}</div>
+          <div><b>Phone:</b> ${escapeHtml(c.phone || '-')}</div>
+          <div><b>Notes:</b> ${escapeHtml(c.notes || '-')}</div>
+          <h3 style="margin-top:12px;">Add call</h3>
+          <div class="row">
+            <div class="col"><label>Result</label>
+              <select id="callResult" onchange="toggleCallbackField()">
+                <option>No answer</option>
+                <option>Cant talk</option>
+                <option>Order</option>
+                <option>Call back</option>
+              </select>
+            </div>
+            <div class="col"><label>Callback at (required for Call back)</label><input id="callbackAt" type="datetime-local" disabled></div>
+          </div>
+          <div style="margin-top:8px;"><label>Comment</label><textarea id="callComment"></textarea></div>
+          <div style="margin-top:10px;"><button onclick="saveCall()">Save call</button></div>
+          <h3 style="margin-top:14px;">History</h3>
+          <ul>${historyHtml}</ul>
+        `;
+      }
+
+      function toggleCallbackField() {
+        const result = document.getElementById('callResult').value;
+        const cb = document.getElementById('callbackAt');
+        cb.disabled = result !== 'Call back';
+        if (cb.disabled) cb.value = '';
+      }
+
+      async function saveCall() {
+        clearMessages();
+        if (!selectedCustomerId) {
+          showError('Select a customer first.');
+          return;
+        }
+        const token = resolveToken();
+        const result = document.getElementById('callResult').value;
+        const comment = document.getElementById('callComment').value;
+        const callbackRaw = document.getElementById('callbackAt').value;
+        const callbackAt = callbackRaw ? new Date(callbackRaw).toISOString() : '';
+
+        const resp = await rpc('apiAgentAddCall', [token, selectedCustomerId, result, comment, callbackAt]);
+        if (!resp.ok) {
+          showError(resp.error || 'Save call failed.');
+          return;
+        }
+        showSuccess('Call saved.');
+        await loadState();
+        await openCustomer(selectedCustomerId);
+      }
+
+      async function logout() {
+        const token = resolveToken();
+        await rpc('apiLogout', [token]);
+        localStorage.removeItem(SESSION_KEY);
+        go('login');
+      }
+
+      function escapeHtml(v) {
+        return String(v == null ? '' : v)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      (async function init() {
+        try { await loadState(); }
+        catch (err) {
+          showError('Failed to load state.');
+          localStorage.removeItem(SESSION_KEY);
+          setTimeout(() => go('login'), 600);
+        }
+      })();
+    </script>
+  </body>
+</html>
